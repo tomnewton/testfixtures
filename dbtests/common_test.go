@@ -8,6 +8,7 @@ import (
 	"os"
 	"testing"
 	"time"
+	"reflect"
 
 	"github.com/go-testfixtures/testfixtures/v3"
 	_ "github.com/joho/godotenv/autoload"
@@ -173,6 +174,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures/posts_tags.yml",
 					"testdata/fixtures/users.yml",
 					"testdata/fixtures/assets.yml",
+					"testdata/fixtures/accounts.yml",
+					"testdata/fixtures/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -207,6 +210,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures/posts_tags.yml",
 					"testdata/fixtures/users.yml",
 					"testdata/fixtures/assets.yml",
+					"testdata/fixtures/accounts.yml",
+					"testdata/fixtures/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -238,6 +243,7 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures_multi_tables/users.yml",
 					"testdata/fixtures_multi_tables/posts_tags.yml",
 					"testdata/fixtures_multi_tables/assets.yml",
+					"testdata/fixtures_multi_tables/accounts_transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -270,6 +276,7 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures_multi_tables/users.yml",
 					"testdata/fixtures_multi_tables/posts_tags.yml",
 					"testdata/fixtures_multi_tables/assets.yml",
+					"testdata/fixtures_multi_tables/accounts_transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -299,6 +306,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 				testfixtures.Files(
 					"testdata/fixtures/tags.yml",
 					"testdata/fixtures/users.yml",
+					"testdata/fixtures/accounts.yml",
+					"testdata/fixtures/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -329,6 +338,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 				testfixtures.Files(
 					"testdata/fixtures/tags.yml",
 					"testdata/fixtures/users.yml",
+					"testdata/fixtures/accounts.yml",
+					"testdata/fixtures/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -358,6 +369,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures_dirs/fixtures1",
 					"testdata/fixtures_dirs/fixtures2/tags.yml",
 					"testdata/fixtures_dirs/fixtures2/users.yml",
+					"testdata/fixtures_dirs/fixtures2/accounts.yml",
+					"testdata/fixtures_dirs/fixtures2/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -388,6 +401,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures_dirs/fixtures1",
 					"testdata/fixtures_dirs/fixtures2/tags.yml",
 					"testdata/fixtures_dirs/fixtures2/users.yml",
+					"testdata/fixtures_dirs/fixtures2/accounts.yml",
+					"testdata/fixtures_dirs/fixtures2/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -420,6 +435,8 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 					"testdata/fixtures/posts_tags.yml",
 					"testdata/fixtures/users.yml",
 					"testdata/fixtures/assets.yml",
+					"testdata/fixtures/accounts.yml",
+					"testdata/fixtures/transactions.yml",
 				),
 			},
 			additionalOptions...,
@@ -523,6 +540,48 @@ func testLoader(t *testing.T, db *sql.DB, dialect string, additionalOptions ...f
 			t.Errorf("cannot insert post: %v", err)
 		}
 	})
+
+	t.Run("SpannerConstraints", func(t *testing.T) {
+		if dialect != "spanner" {
+			t.Skip("skipping spanner constraints test")
+		}
+		options := append(
+			[]func(*testfixtures.Loader) error{
+				testfixtures.Database(db),
+				testfixtures.Dialect(dialect),
+				testfixtures.Template(),
+				testfixtures.TemplateData(map[string]interface{}{
+					"PostIds": []int{1, 2},
+					"TagIds":  []int{1, 2, 3},
+				}),
+				testfixtures.Directory("testdata/fixtures"),
+				testfixtures.SkipTableChecksumComputation(),
+			},
+			additionalOptions...,
+		)
+		l, err := testfixtures.New(options...)
+		if err != nil {
+			t.Errorf("failed to create Loader: %v", err)
+			return
+		}
+		
+		constraintsBefore, _ := getConstraints(t, db)
+
+		if err := l.Load(); err != nil {
+			t.Errorf("cannot load fixtures: %v", err)
+		}
+
+		constraintsAfter, _ := getConstraints(t, db)
+
+		assertSpannerConstraints(t, constraintsBefore, constraintsAfter)
+
+		// Call load again to test against a database with existing data.
+		if err := l.Load(); err != nil {
+			t.Errorf("cannot load fixtures: %v", err)
+		}
+
+		assertFixturesLoaded(t, db)
+	})
 }
 
 func assertFixturesLoaded(t *testing.T, db *sql.DB) { //nolint
@@ -532,6 +591,8 @@ func assertFixturesLoaded(t *testing.T, db *sql.DB) { //nolint
 	assertCount(t, db, "posts_tags", 6)
 	assertCount(t, db, "users", 2)
 	assertCount(t, db, "assets", 1)
+	assertCount(t, db, "accounts", 2)
+	assertCount(t, db, "transactions", 4)
 }
 
 func assertCount(t *testing.T, db *sql.DB, table string, expectedCount int) { //nolint
@@ -547,3 +608,60 @@ func assertCount(t *testing.T, db *sql.DB, table string, expectedCount int) { //
 		t.Errorf("%s should have %d, but has %d", table, expectedCount, count)
 	}
 }
+
+//nolint:unused
+func getConstraints(t *testing.T, db *sql.DB) ([]testfixtures.SpannerConstraint, error) {
+	rows, err := db.Query(testfixtures.SpannerConstraintsQuery)
+	if err != nil {
+		t.Errorf("cannot get constraints: %v", err)
+	}
+	defer func () {
+		if err := rows.Close(); err != nil {
+			t.Errorf("cannot close rows: %v", err)
+		}
+	}()
+
+	constraints := make([]testfixtures.SpannerConstraint, 0)
+	for rows.Next() {
+		var constraint testfixtures.SpannerConstraint
+		if err = rows.Scan(
+			&constraint.TableName,
+			&constraint.ConstraintName,
+			&constraint.ColumnName,
+			&constraint.Position,
+			&constraint.ReferencedTable,
+			&constraint.ReferencedColumn,
+		); err != nil {
+			return nil, err
+		}	
+		constraints = append(constraints, constraint)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return constraints, nil
+}
+
+//nolint:unused
+func assertSpannerConstraints(t *testing.T, constraintsBefore, constraintsAfter []testfixtures.SpannerConstraint) {
+	if len(constraintsBefore) != len(constraintsAfter) {
+		t.Errorf("constraints before and after should have the same length")
+	}
+
+	for _, constraint := range constraintsBefore {
+		// check if constraint is in constraintsAfter
+		found := false
+		for _, c := range constraintsAfter {
+			if reflect.DeepEqual(c, constraint) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("constraint %s not found in constraintsAfter", constraint.ConstraintName)
+		}
+	}
+}
+

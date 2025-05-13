@@ -4,21 +4,23 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type spanner struct {
 	baseHelper
 
 	cleanTableFn func(string) string
-	constraints  []spannerConstraint
+	constraints  map[string][]SpannerConstraint
 }
 
-type spannerConstraint struct {
-	constraintName   string
-	referencingTable string
-	foreignKeyColumn string
-	referenceTable   string
-	referenceColumn  string
+type SpannerConstraint struct {
+	TableName   string
+	ConstraintName string
+	ColumnName string
+	Position  int
+	ReferencedTable   string
+	ReferencedColumn  string
 }
 
 func (h *spanner) init(db *sql.DB) error {
@@ -90,17 +92,33 @@ func (h *spanner) cleanTableQuery(tableName string) string {
 	return h.cleanTableFn(tableName)
 }
 
-func (h *spanner) getConstraints(q queryable) ([]spannerConstraint, error) {
-	var constraints []spannerConstraint
+const SpannerConstraintsQuery = `
+	SELECT 
+			tc.TABLE_NAME AS table_name,
+			tc.CONSTRAINT_NAME AS constraint_name,
+			kcu.COLUMN_NAME AS column_name,
+			kcu.ORDINAL_POSITION AS position,
+			kcu2.TABLE_NAME AS referenced_table,
+			kcu2.COLUMN_NAME AS referenced_column
+		FROM information_schema.TABLE_CONSTRAINTS tc
+		JOIN information_schema.KEY_COLUMN_USAGE kcu
+			ON tc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA
+			AND tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+		JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+			ON tc.CONSTRAINT_SCHEMA = rc.CONSTRAINT_SCHEMA
+			AND tc.CONSTRAINT_NAME = rc.CONSTRAINT_NAME
+		JOIN information_schema.KEY_COLUMN_USAGE kcu2
+			ON rc.UNIQUE_CONSTRAINT_SCHEMA = kcu2.CONSTRAINT_SCHEMA
+			AND rc.UNIQUE_CONSTRAINT_NAME = kcu2.CONSTRAINT_NAME
+			AND kcu.ORDINAL_POSITION = kcu2.ORDINAL_POSITION
+		WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+		ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;
+`
 
-	const sql = `
-		SELECT tc.CONSTRAINT_NAME, key.TABLE_NAME, key.COLUMN_NAME, ref.TABLE_NAME, ref.COLUMN_NAME
-		FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE key
-			JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc ON key.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-			JOIN INFORMATION_SCHEMA.CONSTRAINT_COLUMN_USAGE ref ON ref.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-		WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
-		`
-	rows, err := q.Query(sql)
+func (h *spanner) getConstraints(q queryable) (map[string][]SpannerConstraint, error) {
+	var constraints = make(map[string][]SpannerConstraint)
+
+	rows, err := q.Query(SpannerConstraintsQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -109,37 +127,58 @@ func (h *spanner) getConstraints(q queryable) ([]spannerConstraint, error) {
 	}()
 
 	for rows.Next() {
-		var constraint spannerConstraint
+		var constraint SpannerConstraint
 		if err = rows.Scan(
-			&constraint.constraintName,
-			&constraint.referencingTable,
-			&constraint.foreignKeyColumn,
-			&constraint.referenceTable,
-			&constraint.referenceColumn,
+			&constraint.TableName,
+			&constraint.ConstraintName,
+			&constraint.ColumnName,
+			&constraint.Position,
+			&constraint.ReferencedTable,
+			&constraint.ReferencedColumn,
 		); err != nil {
 			return nil, err
 		}
 
-		constraints = append(constraints, constraint)
+		if constraints[constraint.ConstraintName] == nil {
+			constraints[constraint.ConstraintName] = []SpannerConstraint{}
+		}
+		constraints[constraint.ConstraintName] = append(constraints[constraint.ConstraintName], constraint)
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-
 	return constraints, nil
 }
+
 
 func (h *spanner) dropAndRecreateConstraints(db *sql.DB, loadFn loadFunction) (err error) {
 	defer func() {
 		// Re-create constraints again after load
-		for _, constraint := range h.constraints {
+		for key := range h.constraints {
+			var lengthConstraints = len(h.constraints[key])
+			var orderedConstraints = make([]SpannerConstraint, lengthConstraints)
+
+			for _, constraint := range h.constraints[key] {
+				orderedConstraints[constraint.Position-1] = constraint
+			}
+
+			var columnName = orderedConstraints[0].ColumnName
+			for i := 1; i < lengthConstraints; i++ {
+				columnName = strings.Join([]string{columnName, orderedConstraints[i].ColumnName}, ", ")
+			}
+
+			var referencedColumn = orderedConstraints[0].ReferencedColumn
+			for i := 1; i < lengthConstraints; i++ {
+				referencedColumn = strings.Join([]string{referencedColumn, orderedConstraints[i].ReferencedColumn}, ", ")
+			}
+
 			cmd := fmt.Sprintf(
 				`ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s (%s)`,
-				constraint.referencingTable,
-				constraint.constraintName,
-				constraint.foreignKeyColumn,
-				constraint.referenceTable,
-				constraint.referenceColumn,
+				orderedConstraints[0].TableName,
+				orderedConstraints[0].ConstraintName,
+				columnName,
+				orderedConstraints[0].ReferencedTable,
+				referencedColumn,
 			)
 
 			if _, err2 := db.Exec(cmd); err2 != nil && err == nil {
@@ -148,13 +187,15 @@ func (h *spanner) dropAndRecreateConstraints(db *sql.DB, loadFn loadFunction) (e
 		}
 	}()
 
-	for _, constraint := range h.constraints {
+	for key := range h.constraints {
+		constraints := h.constraints[key]
 		cmd := fmt.Sprintf(
 			`ALTER TABLE %s DROP CONSTRAINT %s`,
-			constraint.referencingTable,
-			constraint.constraintName,
+			constraints[0].TableName,
+			constraints[0].ConstraintName,
 		)
 		if _, err := db.Exec(cmd); err != nil {
+			fmt.Println("error dropping constraint", err)
 			return err
 		}
 	}

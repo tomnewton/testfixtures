@@ -3,6 +3,9 @@ version: '3'
 services:
   testfixtures:
     image: testfixtures
+    volumes:
+      - .:/app
+    working_dir: /app
     depends_on:
       - postgresql
       - mariadb
@@ -10,7 +13,7 @@ services:
       - cockroachdb
       - clickhouse
       - spanner
-    environment:
+    environment: &test-environment
       PGPASSWORD: postgres
       PG_CONN_STRING: host=postgresql user=postgres dbname=testfixtures_test port=5432 sslmode=disable
       MYSQL_CONN_STRING: root:mariadb@tcp(mariadb)/testfixtures_test
@@ -20,6 +23,20 @@ services:
       CLICKHOUSE_CONN_STRING: clickhouse://clickhouse:clickhouse@clickhouse:9000/testfixtures_test?debug=false
       SPANNER_CONN_STRING: projects/test-project/instances/test-instance/databases/testdb
       SPANNER_EMULATOR_HOST: spanner:9010
+
+  testfixtures-arm64:
+    image: testfixtures
+    volumes:
+      - .:/app
+    working_dir: /app
+    depends_on:
+      - postgresql
+      - mariadb
+      - sqlserver
+      - cockroachdb
+      - clickhouse-arm64
+      - spanner
+    environment: *test-environment
 
   postgresql:
     image: postgres:16.3-alpine
@@ -36,23 +53,31 @@ services:
 
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
     environment:
       ACCEPT_EULA: 'Y'
       SA_PASSWORD: SQL@1server
 
   cockroachdb:
-    image: cockroachdb/cockroach:v20.1.3
+    image: cockroachdb/cockroach:v20.1.3 
+    platform: linux/amd64
     command: start-single-node --store /cockroach-data --insecure --advertise-host cockroachdb
 
   clickhouse:
-    image: yandex/clickhouse-server:22-alpine
-    ports:
+    image: "yandex/clickhouse-server:22-alpine"
+    ports: &clickhouse-ports
       - 9010:9000
       - 8133:8123
-    environment:
+    environment: &clickhouse-environment
       CLICKHOUSE_DB: testfixtures_test
       CLICKHOUSE_USER: clickhouse
       CLICKHOUSE_PASSWORD: clickhouse
+
+  clickhouse-arm64:
+    container_name: clickhouse
+    image: "arm64v8/clickhouse:25.4"
+    ports: *clickhouse-ports
+    environment: *clickhouse-environment
 
   spanner:
     image: gcr.io/cloud-spanner-emulator/emulator

@@ -72,6 +72,11 @@ tasks:
       - task: docker:build
       - task: docker:test
 
+  docker-arm64:
+    cmds:
+      - task: docker:build
+      - task: docker:test-arm64
+
   docker:build:
     cmds:
       - docker build -t testfixtures .
@@ -79,4 +84,9 @@ tasks:
   docker:test:
     cmds:
       - docker compose down -v --remove-orphans
-      - docker compose run testfixtures go test -v -tags 'postgresql sqlite mysql sqlserver cockroachdb clickhouse spanner' ./...
+      - docker compose run testfixtures go test  -tags 'postgresql sqlite mysql sqlserver cockroachdb clickhouse spanner' ./...  
+  
+  docker:test-arm64:
+    cmds:
+      - docker compose down -v --remove-orphans
+      - docker compose run testfixtures-arm64 go test  -tags 'postgresql sqlite mysql sqlserver cockroachdb clickhouse spanner' ./...  
