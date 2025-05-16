@@ -3,6 +3,7 @@ package shared
 
 import (
 	"database/sql"
+	"strings"
 )
 
 type Queryable interface {
@@ -77,3 +78,27 @@ const SpannerConstraintsQuery = `
 		WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
 		ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME, kcu.ORDINAL_POSITION;
 `
+
+func GetOrderedTablesFromYaml(yamlData []byte) ([]string, error) {
+	var tables []string
+	lines := strings.Split(string(yamlData), "\n")
+
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		// Skip empty lines
+		if len(strings.TrimSpace(line)) == 0 {
+			continue
+		}
+
+		// Check if line starts with letter and ends with colon
+		if len(line) > 0 &&
+			((line[0] >= 'a' && line[0] <= 'z') || (line[0] >= 'A' && line[0] <= 'Z')) &&
+			strings.HasSuffix(strings.TrimSpace(line), ":") {
+
+			// Extract table name by removing trailing colon and whitespace
+			tableName := strings.TrimSuffix(strings.TrimSpace(line), ":")
+			tables = append(tables, tableName)
+		}
+	}
+	return tables, nil
+}

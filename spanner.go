@@ -146,3 +146,7 @@ func (h *spanner) dropAndRecreateConstraints(db *sql.DB, loadFn loadFunction) (e
 
 	return tx.Commit()
 }
+
+func (h *spanner) whileInsertOnTable(tx *sql.Tx, tableName string, fn func() error) error {
+	return fn()
+}

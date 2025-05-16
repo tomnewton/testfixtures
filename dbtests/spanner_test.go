@@ -66,6 +66,45 @@ func TestSpanner(t *testing.T) {
 
 		assertFixturesLoaded(t, db)
 	})
+
+	t.Run("SpannerConstraintsMultiTables", func(t *testing.T) {
+		options := append(
+			[]func(*testfixtures.Loader) error{
+				testfixtures.Database(db),
+				testfixtures.Dialect(dialect),
+				testfixtures.Template(),
+				testfixtures.TemplateData(map[string]interface{}{
+					"PostIds": []int{1, 2},
+					"TagIds":  []int{1, 2, 3},
+				}),
+				testfixtures.FilesMultiTables("testdata/fixtures_multi_tables/accounts_transactions.yml"),
+				testfixtures.SkipTableChecksumComputation(),
+			},
+			additionalOptions...,
+		)
+		l, err := testfixtures.New(options...)
+		if err != nil {
+			t.Errorf("failed to create Loader: %v", err)
+			return
+		}
+
+		constraintsBefore, _ := shared.GetConstraints(db)
+
+		if err := l.Load(); err != nil {
+			t.Errorf("cannot load fixtures: %v", err)
+		}
+
+		constraintsAfter, _ := shared.GetConstraints(db)
+
+		assertSpannerConstraints(t, constraintsBefore, constraintsAfter)
+
+		// Call load again to test against a database with existing data.
+		if err := l.Load(); err != nil {
+			t.Errorf("cannot load fixtures: %v", err)
+		}
+
+		assertFixturesLoaded(t, db)
+	})
 }
 
 func prepareSpannerDB(t *testing.T) {

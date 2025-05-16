@@ -14,6 +14,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/go-testfixtures/testfixtures/v3/shared"
 	"gopkg.in/yaml.v3"
 )
 
@@ -731,12 +732,16 @@ func (l *Loader) fixturesFromFilesMultiTables(fileNames ...string) ([]*fixtureFi
 			return nil, fmt.Errorf("testfixtures: could not unmarshal YAML: %w", err)
 		}
 
-		tables, ok := data.(map[string]interface{})
+		tablesMap, ok := data.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("testfixtures: could not cast tables: not a map[string]interface{}")
+			return nil, fmt.Errorf("testfixtures: could not cast data: not a map[string]interface{}")
 		}
 
-		for table, records := range tables {
+		tables, _ := shared.GetOrderedTablesFromYaml(content)
+
+		for i := range len(tables) {
+			table := tables[i]
+			records := tablesMap[table]
 			result, err := l.buildInterfacesSlice(records)
 			if err != nil {
 				return nil, err
